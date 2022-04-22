@@ -1,51 +1,36 @@
 import numpy as np
 import pandas as pd
 from scipy.sparse import csr_matrix
+#from .template_rank import AbstractRanker
 
 
 def records_to_csr(N, records, lamb):
     row, col, t, value = zip(*records)
     data = lamb*np.array(value)*np.ones_like(row)
-    data = np.log(1-data)
     return csr_matrix((data, (row, col)), shape=(N, N))
 
-def contacts_to_csr(N, contacts, lamb):
-    if len(contacts) == 0:
-        return csr_matrix((N, N))
-    else:
-        return records_to_csr(N, contacts, lamb)
 
-
-def get_notinf_p_mean_field(probas, nus):
+def get_infection_probas_mean_field(probas, transmissions):
     """
     - probas[i,s] = P_s^i(t)
-    - nus = csr sparse matrix of i, j, log(1-lambda_ij(t))
-    - notinf_p[i]  = sum_j log(1-lambda_ij(t)) P_I^j(t)
+    - transmissions = csr sparse matrix of i, j, lambda_ij(t)
+    - infection_probas[i]  = sum_j lambda_ij P_I^j(t)
     """
-    notinf_p = np.exp(nus.dot(probas[:, 1]))
-    assert np.all((notinf_p >=0) & (notinf_p <=1))
-    return notinf_p
+    infection_probas = transmissions.dot(probas[:, 1])
+    return infection_probas
 
 
-def propagate(probas, not_inf_probs, recover_probas):
+def propagate(probas, infection_probas, recover_probas):
     """
     - probas[i,s] = P_s^i(t)
-    - not_inf_probs[i]  = proba that i doesn't get infected (if susceptible)
+    - infection_probas[i]  = proba that i get infected (if susceptible)
     - recover_probas[i] = proba that i recovers (if infected)
     - probas_next[i, s] = P_s^i(t+1)
     """
     probas_next = np.zeros_like(probas)
-    probas_next[:, 0] = probas[:, 0]*not_inf_probs
-    probas_next[:, 1] = probas[:, 1]*(1 - recover_probas) + probas[:, 0]*(1-not_inf_probs)
+    probas_next[:, 0] = probas[:, 0]*(1 - infection_probas)
+    probas_next[:, 1] = probas[:, 1]*(1 - recover_probas) + probas[:, 0]*infection_probas
     probas_next[:, 2] = probas[:, 2] + probas[:, 1]*recover_probas
-    ## try fixing probs
-    check = probas_next > 1
-    fix = probas_next[check] -1 < 1e-15
-    
-    assert np.all((probas_next >=0)) and np.all(fix)
-    #if len(fix)>0:
-    #    id_fix = np.stack(np.where(check))[fix]
-    #    probas_next[id_fix[0],id_fix[1]] = 1
     return probas_next
 
 
@@ -65,7 +50,7 @@ def reset_probas(t, probas, observations):
             probas[t, obs["i"], :] = [0, 0, 1]  # p_i^R = 1
 
 
-def run_mean_field(initial_probas, recover_probas, loglambs, observations):
+def run_mean_field(initial_probas, recover_probas, transmissions, observations):
     """
     Run the probability evolution from t=0 to t=t_max=len(transmissions) and:
     - recover_probas[i] = mu_i time-independent
@@ -75,25 +60,25 @@ def run_mean_field(initial_probas, recover_probas, loglambs, observations):
     - probas[t, i, s] = P_s^i(t)
     """
     # initialize
-    t_max = len(loglambs)
+    t_max = len(transmissions)
     N = initial_probas.shape[0]
     probas = np.zeros((t_max + 1, N, 3))
     probas[0] = initial_probas.copy()
     # iterate over time steps
     for t in range(t_max):
         reset_probas(t, probas, observations)
-        notinf_probas = get_notinf_p_mean_field(
-            probas[t], loglambs[t]
+        infection_probas = get_infection_probas_mean_field(
+            probas[t], transmissions[t]
         )
         probas[t+1] = propagate(
-            probas[t], notinf_probas, recover_probas
+            probas[t], infection_probas, recover_probas
         )
-        if np.any(probas[t+1] < 0):
-            raise AssertionError("Probas are negative")
+        #if np.any(probas[t+1] < 0):
+        #    raise AssertionError("Probas are negative")
     return probas
 
 
-def ranking_backtrack(t, loglambs, observations, delta, tau, mu):
+def ranking_backtrack(t, transmissions, observations, delta, tau, mu):
     """Backtrack using mean field.
 
     Run mean field from t - delta to t, starting from all susceptible and
@@ -103,7 +88,7 @@ def ranking_backtrack(t, loglambs, observations, delta, tau, mu):
 
     Returns scores = probas[s=I, t=t]. If t < delta returns random scores.
     """
-    N = loglambs[0].shape[0]
+    N = transmissions[0].shape[0]
     if (t < delta):
         scores = np.random.rand(N)/N
         return scores
@@ -115,11 +100,11 @@ def ranking_backtrack(t, loglambs, observations, delta, tau, mu):
         obs["t"] = obs["t_test"] - t_start
         obs["t_I"] = obs["t"] - tau
     probas = run_mean_field(
-        initial_probas, recover_probas, loglambs[t_start:t+1], observations
+        initial_probas, recover_probas, transmissions[t_start:t+1], observations
     )
     scores = probas[t-t_start, :, 1].copy()  # probas[s=I, t]
-    if sum(scores) < 0:
-        raise ValueError("Negative sum of scores")
+    #if sum(scores) < 0:
+    #    raise ValueError("Negative sum of scores")
     return scores
 
 
@@ -151,11 +136,6 @@ def check_inputs(t_day, daily_contacts, daily_obs):
                 f"daily_obs t_min={t_min} t_max={t_max} t_day-1={t_day-1}"
             )
     return
-
-def prepare_obs(daily_obs):
-    return [
-            dict(i=i, s=s, t_test=t_test) for i, s, t_test in daily_obs
-        ]
 
 
 class MeanFieldRanker:
