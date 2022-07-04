@@ -9,6 +9,27 @@ def records_to_csr(N, records, lamb):
     data = np.log(1-data)
     return csr_matrix((data, (row, col)), shape=(N, N))
 
+def contacts_rec_to_csr(N, records, lamb, log1m=True):
+    """
+    Faster function to take advantage of records array
+    and avoid loops
+    @author: Fabio Mazza
+    """
+    if isinstance(records, np.recarray):
+        records.dtype.names = "i","j","t","m"
+        row = records["i"]
+        col = records["j"]
+        value = records["m"]
+    else:
+        rec = np.array(records)
+        row = rec[:,0].astype(int)
+        col = rec[:,1].astype(int)
+        value = rec[:,2].astype(float)
+    data = lamb*np.array(value)*np.ones_like(row)
+    if log1m:
+        data = np.log(1-data)
+    return csr_matrix((data, (row, col)), shape=(N, N))
+
 def contacts_to_csr(N, contacts, lamb):
     if len(contacts) == 0:
         return csr_matrix((N, N))
@@ -183,7 +204,7 @@ class MeanFieldRanker:
         """
         #check_inputs(t_day, daily_contacts, daily_obs)
         # append daily_contacts and daily_obs
-        daily_transmissions = records_to_csr(self.N, daily_contacts, self.lamb)
+        daily_transmissions = contacts_rec_to_csr(self.N, daily_contacts, self.lamb, log1m=True)
         self.transmissions.append(daily_transmissions)
         self.observations += [
             dict(i=i, s=s, t_test=t_test) for i, s, t_test in daily_obs
