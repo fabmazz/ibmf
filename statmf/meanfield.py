@@ -114,7 +114,7 @@ def run_mean_field(initial_probas, recover_probas, loglambs, observations):
     return probas
 
 
-def ranking_backtrack(t, loglambs, observations, delta, tau, mu):
+def ranking_backtrack(t, loglambs, observations, delta, tau, mu, rng):
     """Backtrack using mean field.
 
     Run mean field from t - delta to t, starting from all susceptible and
@@ -126,7 +126,7 @@ def ranking_backtrack(t, loglambs, observations, delta, tau, mu):
     """
     N = loglambs[0].shape[0]
     if (t < delta):
-        scores = np.random.rand(N)/N
+        scores = rng.rand(N)/N
         return scores
     t_start = t - delta
     initial_probas = np.broadcast_to([1.,0.,0.], (N, 3)) # all susceptible start
@@ -144,17 +144,18 @@ def ranking_backtrack(t, loglambs, observations, delta, tau, mu):
     return scores
 
 
-def key_tie_break(t):
-    "additional random number to break tie"
-    return t[1], np.random.rand()
+def make_tie_break(rng=None):
+    if rng is None:
+        rng = np.random
+    return lambda t: (t[1], rng.rand())
 
 
-def get_rank(scores):
+def get_rank(scores, tie_break):
     """
     Returns list of (index, value) of scores, sorted by decreasing order.
-    The order is randomized in case of tie thanks to the key_tie_break function.
+    The order is randomized in case of tie thanks to the tie_break function.
     """
-    return sorted(enumerate(scores), key=key_tie_break, reverse=True)
+    return sorted(enumerate(scores), key=tie_break, reverse=True)
 
 
 def check_inputs(t_day, daily_contacts, daily_obs):
@@ -188,6 +189,8 @@ class MeanFieldRanker:
         self.delta_init = delta
         self.mu = mu
         self.lamb = lamb
+        self.rng = np.random.RandomState(1)
+        self._tie = make_tie_break(self.rng)
 
     def init(self, N, T):
         self.transmissions = []
@@ -202,6 +205,7 @@ class MeanFieldRanker:
         """
         Add obs
         """
+        # check that t=t_day in daily_contacts and t=t_day-1 in daily_obs
         #check_inputs(t_day, daily_contacts, daily_obs)
         # append daily_contacts and daily_obs
         daily_transmissions = contacts_rec_to_csr(self.N, daily_contacts, self.lamb, log1m=True)
@@ -216,23 +220,16 @@ class MeanFieldRanker:
         return: list -- [(index, value), ...]
         '''
         self.delta = min(self.delta_init, t_day)
-        # check that t=t_day in daily_contacts and t=t_day-1 in daily_obs
-        """check_inputs(t_day, daily_contacts, daily_obs)
-        # append daily_contacts and daily_obs
-        daily_transmissions = records_to_csr(self.N, daily_contacts, self.lamb)
-        self.transmissions.append(daily_transmissions)
-        self.observations += [
-            dict(i=i, s=s, t_test=t_test) for i, s, t_test in daily_obs
-        ]"""
+        
         self._append_data(t_day, daily_contacts, daily_obs)
 
         # scores given by mean field run from t-delta to t
         scores = ranking_backtrack(
             t_day, self.transmissions, self.observations,
-            self.delta, self.tau, self.mu
+            self.delta, self.tau, self.mu, self.rng,
         )
         self.mfIs[t_day] = sum(scores)
         data["<I>"] = self.mfIs        
         # convert to list [(index, value), ...]
-        rank = get_rank(scores)
+        rank = get_rank(scores, self._tie)
         return rank
