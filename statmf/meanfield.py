@@ -208,7 +208,10 @@ class MeanFieldRanker:
         # check that t=t_day in daily_contacts and t=t_day-1 in daily_obs
         #check_inputs(t_day, daily_contacts, daily_obs)
         # append daily_contacts and daily_obs
-        daily_transmissions = contacts_rec_to_csr(self.N, daily_contacts, self.lamb, log1m=True)
+        if len(daily_contacts) > 0:
+            daily_transmissions = contacts_rec_to_csr(self.N, daily_contacts, self.lamb, log1m=True)
+        else:
+            daily_transmissions = csr_matrix((self.N, self.N))
         self.transmissions.append(daily_transmissions)
         self.observations += [
             dict(i=i, s=s, t_test=t_test) for i, s, t_test in daily_obs
