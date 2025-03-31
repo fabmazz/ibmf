@@ -10,6 +10,7 @@ setup(
     install_requires=[
         "numpy",
         "scipy",
-        "pandas"
+        "pandas",
+        "numba",
     ]
 )
